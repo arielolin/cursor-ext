@@ -1,0 +1,160 @@
+{
+  "name": "cursor-ext",
+  "displayName": "Cursor Extension",
+  "description": "Enhanced cursor extension for VS Code",
+  "publisher": "Apiiro",
+  "icon": "images/icon.png",
+  "version": "0.1.93",
+  "engines": {
+    "vscode": "^1.92.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "inventory.refresh",
+        "title": "Refresh Inventory",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "inventory.sort",
+        "title": "Sort Inventory Items",
+        "icon": "$(sort-precedence)"
+      },
+      {
+        "command": "inventory.filter",
+        "title": "Filter by Risk Level",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "risks.refresh",
+        "title": "Refresh Risks",
+        "icon": "$(refresh)"
+      },
+
+      {
+        "command": "apiiro.showLogs",
+        "title": "Show Extension Logs",
+        "category": "Apiiro"
+      },
+      {
+        "command": "apiiro.clearLogs",
+        "title": "Clear Extension Logs",
+        "category": "Apiiro"
+      },
+      {
+        "command": "apiiro-code.openCursorChat",
+        "title": "Open in Cursor Chat",
+        "category": "Apiiro"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "inventory-explorer",
+          "title": "Apiiro",
+          "icon": "images/apiiro.svg"
+        }
+      ]
+    },
+    "views": {
+      "inventory-explorer": [
+        {
+          "type": "tree",
+          "id": "inventoryExplorer",
+          "name": "Inventory"
+        },
+        {
+          "type": "tree",
+          "id": "risksExplorer",
+          "name": "Risks"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "inventory.sort",
+          "when": "view == inventoryExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "inventory.filter",
+          "when": "view == inventoryExplorer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "inventory.refresh",
+          "when": "view == inventoryExplorer",
+          "group": "navigation@3"
+        },
+        {
+          "command": "risks.refresh",
+          "when": "view == risksExplorer",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Cursor Extension",
+      "properties": {
+        "apiiroCode.token": {
+          "type": "string",
+          "description": "API token for Apiiro"
+        },
+        "apiiroCode.backendUrl": {
+          "type": "string",
+          "description": "Apiiro backend URL (defaults to https://app-staging.apiiro.com)",
+          "default": "https://app-staging.apiiro.com"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.2.2",
+    "@types/mocha": "^10.0.7",
+    "@types/node": "20.x",
+    "@types/node-cache": "^4.1.3",
+    "@types/prettier": "^3.0.0",
+    "@types/vscode": "^1.91.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "@vscode/test-cli": "^0.0.4",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.56.0",
+    "prettier": "^3.3.3",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.3",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "@types/axios": "^0.14.0",
+    "@types/lodash": "^4.17.10",
+    "@types/node-fetch": "^2.6.11",
+    "axios": "^1.7.7",
+    "diff": "^7.0.0",
+    "lodash": "^4.17.21",
+    "mongodb": "^6.9.0",
+    "node-cache": "^5.1.2",
+    "node-fetch": "^3.3.2",
+    "simple-git": "^3.27.0"
+  }
+}
