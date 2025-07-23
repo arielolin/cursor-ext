@@ -157,16 +157,29 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  const debounceHighlight = _.debounce(async (editor: vscode.TextEditor) => {
-    await highlightRisks(editor, repoData);
+  // Trigger local secrets detection on file save
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument(async (document) => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && editor.document === document) {
+        logger.appendLine(`[${new Date().toISOString()}] [INFO] File saved, re-scanning for secrets: ${document.fileName}`);
+        await highlightRisks(editor, repoData);
+      }
+    }),
+  );
+
+  // Lightweight debounced highlighting for text changes (Apiiro risks only)
+  const debounceApiiroHighlight = _.debounce(async (editor: vscode.TextEditor) => {
+    await riskHighlighter.highlightApiiroRisksOnly(editor, repoData);
   }, 500);
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument(async (event) => {
       const editor = vscode.window.activeTextEditor;
       if (editor && editor.document === event.document) {
+        // Only remove highlights and re-highlight Apiiro risks (not local secrets)
         await riskHighlighter.removeAllHighlights(editor);
-        debounceHighlight(editor);
+        debounceApiiroHighlight(editor);
       }
     }),
   );
