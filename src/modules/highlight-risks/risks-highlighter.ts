@@ -25,12 +25,12 @@ import { findRisksForFile } from "../../services/file-risk-service";
 // New imports for local secrets functionality
 import { OnDemandSecretsService } from "../../services/on-demand-secrets-service";
 import { EnhancedDiffService } from "../../services/enhanced-diff-service";
-import { 
-  LocalSecretRisk, 
-  isLocalSecretRisk,
-  LocalLineChangeInfo 
-} from "../../types/local-secret-risk";
 import { getRemoteUrl } from "../../services/git-service";
+
+// Type guard for local secrets
+function isLocalSecretRisk(risk: Risk): boolean {
+  return (risk as any).isLocalDetection === true;
+}
 
 export class RiskHighlighter {
   private readonly decorationTypes: Map<
@@ -49,7 +49,14 @@ export class RiskHighlighter {
   private readonly enhancedDiffService: EnhancedDiffService;
   private isLocalSecretsEnabled: boolean;
 
+  // Output channel for logging
+  private readonly outputChannel: vscode.OutputChannel;
+
   constructor(context: vscode.ExtensionContext) {
+    // Create output channel for logging
+    this.outputChannel = vscode.window.createOutputChannel("Risk Highlights");
+    this.outputChannel.appendLine("[RiskHighlighter] Constructor: Initializing RiskHighlighter");
+    
     // Create standard decorations for Apiiro risks
     this.decorationTypes = new Map([
       [
@@ -77,17 +84,21 @@ export class RiskHighlighter {
       new RiskRemediationTriggerCodeLensProvider();
 
     // Initialize new services
+    this.outputChannel.appendLine("[RiskHighlighter] Constructor: Initializing OnDemandSecretsService");
     this.onDemandSecretsService = new OnDemandSecretsService();
+    this.outputChannel.appendLine("[RiskHighlighter] Constructor: Initializing EnhancedDiffService");
     this.enhancedDiffService = new EnhancedDiffService();
     
     // Check if local secrets scanning is enabled
     this.isLocalSecretsEnabled = this.getLocalSecretsConfig();
+    this.outputChannel.appendLine(`[RiskHighlighter] Constructor: Local secrets enabled: ${this.isLocalSecretsEnabled}`);
 
     context.subscriptions.push(
       ...Array.from(this.decorationTypes.values()),
       ...Array.from(this.localDecorationTypes.values()),
       this.diagnosticsHelper,
       this.onDemandSecretsService,
+      this.outputChannel, // Add output channel to subscriptions for cleanup
       vscode.languages.registerCodeLensProvider(
         { scheme: "file" },
         this.remediationTriggerProvider,
@@ -95,10 +106,14 @@ export class RiskHighlighter {
       // Listen for configuration changes
       vscode.workspace.onDidChangeConfiguration(e => {
         if (e.affectsConfiguration("apiiroCode.secretsOnDemand")) {
+          const oldValue = this.isLocalSecretsEnabled;
           this.isLocalSecretsEnabled = this.getLocalSecretsConfig();
+          this.outputChannel.appendLine(`[RiskHighlighter] Config change: Local secrets enabled changed from ${oldValue} to ${this.isLocalSecretsEnabled}`);
         }
       })
     );
+    
+    this.outputChannel.appendLine("[RiskHighlighter] Constructor: Initialization complete");
   }
 
   /**
@@ -106,33 +121,46 @@ export class RiskHighlighter {
    */
   private getLocalSecretsConfig(): boolean {
     const config = vscode.workspace.getConfiguration("apiiroCode.secretsOnDemand");
-    return config.get("enabled", true);
+    const enabled = config.get("enabled", true);
+    this.outputChannel.appendLine(`[RiskHighlighter] getLocalSecretsConfig: Retrieved config value: ${enabled}`);
+    return enabled;
   }
 
   /**
    * Lightweight highlighting for text changes - only Apiiro risks, no local secrets
+   * PRESERVES existing local secret highlights
    */
   public async highlightApiiroRisksOnly(
     editor: vscode.TextEditor,
     repoData: Repository,
   ): Promise<void> {
+    this.outputChannel.appendLine(`[RiskHighlighter] highlightApiiroRisksOnly: Starting for file ${editor.document.fileName}`);
+    
     try {
       const relativeFilePath = getRelativeFilePath(editor);
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightApiiroRisksOnly: Relative file path: ${relativeFilePath}`);
+      
       if (!relativeFilePath) {
+        this.outputChannel.appendLine("[RiskHighlighter] highlightApiiroRisksOnly: No relative file path, returning");
         return;
       }
 
       // Only fetch Apiiro risks for fast highlighting during text changes
+      this.outputChannel.appendLine("[RiskHighlighter] highlightApiiroRisksOnly: Fetching Apiiro risks");
       const apiiroRisks = await findRisksForFile(relativeFilePath, repoData);
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightApiiroRisksOnly: Found ${apiiroRisks.length} Apiiro risks`);
 
       if (apiiroRisks.length === 0) {
-        await this.removeAllHighlights(editor);
+        this.outputChannel.appendLine("[RiskHighlighter] highlightApiiroRisksOnly: No Apiiro risks found, preserving existing highlights");
+        // Don't remove highlights - this preserves local secrets
         return;
       }
 
       // Use simple line change detection (not enhanced)
       const lineNumbers = apiiroRisks.map(r => r.sourceCode.lineNumber);
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightApiiroRisksOnly: Detecting line changes for lines: ${lineNumbers.join(', ')}`);
       const lineChanges = await detectLineChanges(lineNumbers, repoData);
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightApiiroRisksOnly: Line changes detected: ${lineChanges.length} results`);
       
       const groupedRisks = new Map<number, Risk[]>();
       
@@ -142,10 +170,12 @@ export class RiskHighlighter {
         
         // Skip risks on changed lines
         if (lineChange?.hasChanged) {
+          this.outputChannel.appendLine(`[RiskHighlighter] highlightApiiroRisksOnly: Skipping risk on changed line ${lineNum}`);
           continue;
         }
         
         const effectiveLineNumber = lineChange?.newLineNum ?? lineNum;
+        this.outputChannel.appendLine(`[RiskHighlighter] highlightApiiroRisksOnly: Adding risk to line ${effectiveLineNumber} (original: ${lineNum})`);
         
         if (!groupedRisks.has(effectiveLineNumber)) {
           groupedRisks.set(effectiveLineNumber, []);
@@ -154,12 +184,19 @@ export class RiskHighlighter {
         groupedRisks.get(effectiveLineNumber)!.push(risk);
       }
 
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightApiiroRisksOnly: Grouped risks by ${groupedRisks.size} lines`);
+      this.outputChannel.appendLine("[RiskHighlighter] highlightApiiroRisksOnly: Applying inline highlights");
       await this.applyInlineHighlights(editor, groupedRisks);
+      
+      this.outputChannel.appendLine("[RiskHighlighter] highlightApiiroRisksOnly: Updating remediation triggers");
       this.remediationTriggerProvider.updateRemediationTriggers(groupedRisks);
+      
+      this.outputChannel.appendLine("[RiskHighlighter] highlightApiiroRisksOnly: Updating diagnostics");
       this.diagnosticsHelper.updateDiagnostics(editor, groupedRisks);
       
+      this.outputChannel.appendLine("[RiskHighlighter] highlightApiiroRisksOnly: Completed successfully");
     } catch (error) {
-      console.error("Error highlighting Apiiro risks:", error);
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightApiiroRisksOnly: Error occurred: ${error}`);
     }
   }
 
@@ -168,29 +205,42 @@ export class RiskHighlighter {
     repoData: Repository,
     includeLocalSecrets: boolean = true
   ): Promise<void> {
+    this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Starting for file ${editor.document.fileName}`);
+    this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: includeLocalSecrets=${includeLocalSecrets}, isLocalSecretsEnabled=${this.isLocalSecretsEnabled}`);
+    
     try {
       const relativeFilePath = getRelativeFilePath(editor);
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Relative file path: ${relativeFilePath}`);
+      
       if (!relativeFilePath) {
+        this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: No relative file path, returning");
         return;
       }
 
       // Get the full git repository URL first
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
       let repositoryUrl = repoData.serverUrl; // fallback
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Initial repository URL: ${repositoryUrl}`);
       
       if (workspaceFolder) {
         try {
+          this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Getting remote URL for workspace: ${workspaceFolder.uri.fsPath}`);
           repositoryUrl = await getRemoteUrl(workspaceFolder.uri.fsPath);
+          this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Retrieved remote URL: ${repositoryUrl}`);
         } catch (error) {
           // If we can't get the remote URL, use the fallback
-          console.warn("Failed to get remote URL, using fallback:", error);
+          this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Failed to get remote URL, using fallback: ${error}`);
         }
       }
 
       // Fetch Apiiro risks and optionally local secrets
-      const promises: [Promise<Risk[]>, Promise<LocalSecretRisk[]>] = [
+      const shouldScanLocalSecrets = includeLocalSecrets && this.isLocalSecretsEnabled;
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Should scan local secrets: ${shouldScanLocalSecrets}`);
+      
+      this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Starting parallel fetch of Apiiro risks and local secrets");
+      const promises: [Promise<Risk[]>, Promise<Risk[]>] = [
         findRisksForFile(relativeFilePath, repoData),
-        (includeLocalSecrets && this.isLocalSecretsEnabled)
+        shouldScanLocalSecrets
           ? this.onDemandSecretsService.scanFileForSecrets(
               relativeFilePath,
               editor.document.getText(),
@@ -199,32 +249,63 @@ export class RiskHighlighter {
           : Promise.resolve([])
       ];
 
+      this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Awaiting promises");
       const [apiiroRisks, localSecrets] = await Promise.all(promises);
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Received ${apiiroRisks.length} Apiiro risks and ${localSecrets.length} local secrets`);
+
+      // Log details about local secrets
+      if (localSecrets.length > 0) {
+        this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Local secrets details:");
+        localSecrets.forEach((secret, index) => {
+          this.outputChannel.appendLine(`  [${index}] Line ${secret.sourceCode.lineNumber}: ${secret.riskCategory} - ${secret.ruleName || secret.findingName || 'Unknown'}`);
+        });
+      }
 
       // Use enhanced diff service for merging and deduplication
       const allLineNumbers = [
         ...apiiroRisks.map(r => r.sourceCode.lineNumber),
         ...localSecrets.map(r => r.sourceCode.lineNumber)
       ];
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: All line numbers for diff service: ${allLineNumbers.join(', ')}`);
 
+      this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Calling enhanced diff service for line changes");
       const lineMapping = await this.enhancedDiffService.detectLineChangesWithLocalSupport(
         allLineNumbers,
         repoData,
         localSecrets
       );
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Line mapping received with ${Object.keys(lineMapping).length} entries`);
 
+      this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Merging risks with deduplication");
       const mergedRisks = await this.enhancedDiffService.mergeRisksWithDeduplication({
         apiiroRisks,
         localSecrets,
         lineMapping
       });
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Merged risks by ${mergedRisks.size} lines`);
 
+      // Log merged risks details
+      this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Merged risks details:");
+      for (const [lineNum, risks] of mergedRisks.entries()) {
+        const localCount = risks.filter(isLocalSecretRisk).length;
+        const apiiroCount = risks.filter(r => !isLocalSecretRisk(r)).length;
+        this.outputChannel.appendLine(`  Line ${lineNum}: ${localCount} local, ${apiiroCount} Apiiro risks`);
+      }
+
+      this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Applying enhanced inline highlights");
       await this.applyEnhancedInlineHighlights(editor, mergedRisks);
+      
+      this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Updating remediation triggers");
       this.remediationTriggerProvider.updateRemediationTriggers(mergedRisks);
+      
+      this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Updating diagnostics");
       this.diagnosticsHelper.updateDiagnostics(editor, mergedRisks);
+      
+      this.outputChannel.appendLine("[RiskHighlighter] highlightRisksForActiveFile: Completed successfully");
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
+      this.outputChannel.appendLine(`[RiskHighlighter] highlightRisksForActiveFile: Error occurred: ${error}`);
       vscode.window.showErrorMessage(
         `Error highlighting risks: ${errorMessage}`,
       );
@@ -232,6 +313,8 @@ export class RiskHighlighter {
   }
 
   public removeAllHighlights(editor: vscode.TextEditor): void {
+    this.outputChannel.appendLine(`[RiskHighlighter] removeAllHighlights: Removing all highlights for ${editor.document.fileName}`);
+    
     this.decorationTypes.forEach((decoration) =>
       editor.setDecorations(decoration, []),
     );
@@ -240,6 +323,22 @@ export class RiskHighlighter {
     );
     this.diagnosticsHelper.clear();
     this.remediationTriggerProvider.updateRemediationTriggers(new Map());
+    
+    this.outputChannel.appendLine("[RiskHighlighter] removeAllHighlights: All highlights removed");
+  }
+
+  /**
+   * Clear only Apiiro highlights, preserving local highlights
+   */
+  private clearApiiroHighlights(editor: vscode.TextEditor): void {
+    this.outputChannel.appendLine(`[RiskHighlighter] clearApiiroHighlights: Clearing only Apiiro highlights for ${editor.document.fileName}`);
+    
+    this.decorationTypes.forEach((decoration) =>
+      editor.setDecorations(decoration, []),
+    );
+    // Note: localDecorationTypes are NOT cleared here - this preserves local highlights
+    
+    this.outputChannel.appendLine("[RiskHighlighter] clearApiiroHighlights: Apiiro highlights cleared, local highlights preserved");
   }
 
   /**
@@ -249,83 +348,106 @@ export class RiskHighlighter {
     editor: vscode.TextEditor,
     groupedRisks: Map<number, Risk[]>,
   ): Promise<void> {
-    const apiiroDecorationsByLevel = new Map<string, vscode.DecorationOptions[]>();
-    const localDecorationsByLevel = new Map<string, vscode.DecorationOptions[]>();
+    this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Starting for ${groupedRisks.size} lines`);
     
-    // Initialize decoration arrays
+    const apiiroDecorationsByLevel = new Map<string, vscode.DecorationOptions[]>();
+    
+    // Initialize decoration arrays (all risks use regular Apiiro colors now)
     this.decorationTypes.forEach((_, level) =>
       apiiroDecorationsByLevel.set(level, []),
     );
-    this.localDecorationTypes.forEach((_, level) =>
-      localDecorationsByLevel.set(level, []),
-    );
+    this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Initialized decoration arrays for levels: ${Array.from(this.decorationTypes.keys()).join(', ')}`);
 
     for (const [lineNumber, risks] of groupedRisks.entries()) {
+      this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Processing line ${lineNumber} with ${risks.length} risks`);
+      
       try {
         // Separate local and Apiiro risks
         const localRisks = risks.filter(isLocalSecretRisk);
         const apiiroRisks = risks.filter(risk => !isLocalSecretRisk(risk));
+        this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - ${localRisks.length} local, ${apiiroRisks.length} Apiiro risks`);
 
-        // Handle Apiiro risks
+        // Priority system: If both types exist on same line, Apiiro risks take precedence for decoration
+        // but hover message includes both types
         if (apiiroRisks.length > 0) {
+          this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - Processing Apiiro risks (priority)`);
+          
+          // Handle Apiiro risks (they get priority for decoration)
           const highestApiiroRiskLevel = DecorationHelper.getHighestRiskLevel(apiiroRisks);
+          this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - Highest Apiiro risk level: ${highestApiiroRiskLevel}`);
+          
+          const allRisksForHover = localRisks.length > 0 ? risks : apiiroRisks; // Include both if local exists
+          this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - Using ${allRisksForHover.length} risks for hover (including local: ${localRisks.length > 0})`);
+          
           const apiiroDecoration = await this.createEnhancedDecoration(
             highestApiiroRiskLevel,
             editor,
             lineNumber,
-            risks, // Include all risks for hover message
+            allRisksForHover, // Include all risks for comprehensive hover message
             false // isLocal = false
           );
+          this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - Created Apiiro decoration`);
 
           const apiiroDecorations = apiiroDecorationsByLevel.get(highestApiiroRiskLevel) || [];
           apiiroDecorations.push(apiiroDecoration);
           apiiroDecorationsByLevel.set(highestApiiroRiskLevel, apiiroDecorations);
-        }
-
-        // Handle local secrets
-        if (localRisks.length > 0) {
+          this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - Added decoration to level ${highestApiiroRiskLevel} (total: ${apiiroDecorations.length})`);
+          
+        } else if (localRisks.length > 0) {
+          this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - Processing local secrets only`);
+          
+          // Handle local secrets only if no Apiiro risks on this line
+          // Use regular Apiiro colors, not special local colors
           const highestLocalRiskLevel = DecorationHelper.getHighestRiskLevel(localRisks);
+          this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - Highest local risk level: ${highestLocalRiskLevel}`);
+          
           const localDecoration = await this.createEnhancedDecoration(
             highestLocalRiskLevel,
             editor,
             lineNumber,
-            risks, // Include all risks for hover message
-            true // isLocal = true
+            localRisks, // Pass only local risks for hover message
+            false // CHANGED: Use false to get regular Apiiro colors, not purple
           );
+          this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - Created local decoration (using Apiiro colors)`);
 
-          const localDecorations = localDecorationsByLevel.get(highestLocalRiskLevel) || [];
-          localDecorations.push(localDecoration);
-          localDecorationsByLevel.set(highestLocalRiskLevel, localDecorations);
+          const apiiroDecorations = apiiroDecorationsByLevel.get(highestLocalRiskLevel) || [];
+          apiiroDecorations.push(localDecoration);
+          apiiroDecorationsByLevel.set(highestLocalRiskLevel, apiiroDecorations);
+          this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Line ${lineNumber} - Added local decoration to level ${highestLocalRiskLevel} (total: ${apiiroDecorations.length})`);
         }
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
+        this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Error creating decoration for line ${lineNumber}: ${error}`);
         vscode.window.showErrorMessage(
           `Error creating decoration for line ${lineNumber}: ${errorMessage}`,
         );
       }
     }
 
-    // Clear all existing highlights
-    this.removeAllHighlights(editor);
+    // Clear only Apiiro highlights to preserve local secrets
+    this.outputChannel.appendLine("[RiskHighlighter] applyEnhancedInlineHighlights: Clearing only Apiiro highlights to preserve local secrets");
+    this.clearApiiroHighlights(editor);
 
-    // Apply Apiiro risk decorations
+    // Apply all decorations using regular Apiiro colors (local risks now use same colors)
+    this.outputChannel.appendLine("[RiskHighlighter] applyEnhancedInlineHighlights: Applying decorations");
     apiiroDecorationsByLevel.forEach((decorations, level) => {
       const decorationType = this.decorationTypes.get(level);
       if (decorationType) {
+        this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: Applying ${decorations.length} decorations for level ${level}`);
         editor.setDecorations(decorationType, decorations);
+      } else {
+        this.outputChannel.appendLine(`[RiskHighlighter] applyEnhancedInlineHighlights: No decoration type found for level ${level}`);
       }
     });
 
-    // Apply local secret decorations
-    localDecorationsByLevel.forEach((decorations, level) => {
-      const decorationType = this.localDecorationTypes.get(level);
-      if (decorationType) {
-        editor.setDecorations(decorationType, decorations);
-      }
-    });
+    this.outputChannel.appendLine("[RiskHighlighter] applyEnhancedInlineHighlights: Enhanced highlighting completed");
+    // Note: localDecorationsByLevel no longer used - all risks use regular colors
   }
 
+  /**
+   * Original inline highlights method (removes all highlights first)
+   */
   private async applyInlineHighlights(
     editor: vscode.TextEditor,
     groupedRisks: Map<number, Risk[]>,
@@ -358,7 +480,10 @@ export class RiskHighlighter {
       }
     }
 
-    this.removeAllHighlights(editor);
+    // Use selective clearing instead of removeAllHighlights to preserve local highlights
+    this.outputChannel.appendLine("[RiskHighlighter] applyInlineHighlights: Clearing only Apiiro highlights to preserve local ones");
+    this.clearApiiroHighlights(editor);
+    
     decorationsByLevel.forEach((decorations, level) => {
       const decorationType = this.decorationTypes.get(level);
       if (decorationType) {
@@ -438,7 +563,7 @@ export class RiskHighlighter {
     // Add local secret messages first (they're more urgent)
     if (localRisks.length > 0) {
       const localMessages = localRisks.map(localRisk => 
-        createLocalSecretsMessage(localRisk)
+        createLocalSecretsMessage(localRisk as SecretsRisk)
       );
       messages.push(...localMessages);
     }
@@ -470,47 +595,5 @@ export class RiskHighlighter {
     markdownMessage.isTrusted = true;
     markdownMessage.supportHtml = true;
     return markdownMessage;
-  }
-
-  private async validateAndGroupRisksByLine(
-    risks: Risk[],
-    repoData: Repository,
-  ): Promise<Map<number, Risk[]>> {
-    const groupedRisks = new Map<number, Risk[]>();
-
-    try {
-      const lineNumbers = risks.map((risk) => risk.sourceCode.lineNumber);
-      const lineChangesData = await detectLineChanges(lineNumbers, repoData);
-
-      if (lineChangesData[0]?.errors?.length) {
-        throw new Error(lineChangesData[0].errors.join(","));
-      }
-
-      risks.forEach((risk, index) => {
-        const { hasChanged, newLineNum } = lineChangesData[index];
-        const lineNumber = hasChanged
-          ? -1
-          : newLineNum || risk.sourceCode.lineNumber;
-
-        if (hasChanged) {
-          groupedRisks.delete(lineNumber);
-          return;
-        }
-
-        if (!groupedRisks.has(lineNumber)) {
-          groupedRisks.set(lineNumber, []);
-        }
-        groupedRisks.get(lineNumber)!.push(risk);
-      });
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(
-        `Error highlighting risks: ${errorMessage}`,
-      );
-      return new Map();
-    }
-
-    return groupedRisks;
   }
 }

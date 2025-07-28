@@ -1,10 +1,10 @@
 {
   "name": "cursor-ext",
-  "displayName": "Cursor Extension",
-  "description": "Enhanced cursor extension for VS Code",
+  "displayName": "Apiiro Code",
+  "description": "Enhanced cursor extension for Cursor",
   "publisher": "Apiiro",
   "icon": "images/icon.png",
-  "version": "0.1.93",
+  "version": "0.0.1",
   "engines": {
     "vscode": "^1.92.0"
   },

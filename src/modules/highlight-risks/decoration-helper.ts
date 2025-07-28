@@ -27,6 +27,26 @@ export class DecorationHelper {
     },
   };
 
+  // Distinct colors for local secrets (more purple/magenta tint)
+  private static readonly LOCAL_RISK_COLORS = {
+    [riskLevels.Critical]: {
+      backgroundColor: "rgba(255, 0, 255, 0.4)",
+      overviewRulerColor: "#FF00FF",
+    },
+    [riskLevels.High]: {
+      backgroundColor: "rgba(255, 69, 204, 0.3)",
+      overviewRulerColor: "#ff45cc",
+    },
+    [riskLevels.Medium]: {
+      backgroundColor: "rgba(255, 140, 255, 0.3)",
+      overviewRulerColor: "#FF8CFF",
+    },
+    [riskLevels.Low]: {
+      backgroundColor: "rgba(255, 200, 255, 0.2)",
+      overviewRulerColor: "#FFC8FF",
+    },
+  };
+
   static createDecoration(
     riskLevel: RiskLevel,
   ): vscode.TextEditorDecorationType {
@@ -37,6 +57,19 @@ export class DecorationHelper {
       backgroundColor: decoration.backgroundColor,
       overviewRulerColor: decoration.overviewRulerColor,
       overviewRulerLane: vscode.OverviewRulerLane.Right,
+    });
+  }
+
+  static createLocalDecoration(
+    riskLevel: RiskLevel,
+  ): vscode.TextEditorDecorationType {
+    const decoration = (this.LOCAL_RISK_COLORS[riskLevel] ||
+      this.LOCAL_RISK_COLORS.Low) as unknown as RiskDecoration;
+
+    return vscode.window.createTextEditorDecorationType({
+      backgroundColor: decoration.backgroundColor,
+      overviewRulerColor: decoration.overviewRulerColor,
+      overviewRulerLane: vscode.OverviewRulerLane.Left, // Use left lane to distinguish from Apiiro risks
     });
   }
 

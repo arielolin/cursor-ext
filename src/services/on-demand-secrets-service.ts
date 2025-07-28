@@ -5,11 +5,7 @@ import { createApiiroRestApiClient } from "./apiiro-rest-api-provider";
 import {
   OnDemandSecretsRequest,
   OnDemandSecretsResponse,
-  OnDemandSecretItem,
-  LocalSecretRisk,
-  PerformanceOptions,
-  ScanStatusInfo,
-  ScanStatus
+  OnDemandSecretItem
 } from "../types/local-secret-risk";
 import { riskLevels, SecretsRisk } from "../types/risk";
 
@@ -18,88 +14,39 @@ const ON_DEMAND_API_BASE_URL = `/rest-api/v1` as const;
 export class OnDemandSecretsService {
   private cache: NodeCache;
   private logger: vscode.OutputChannel;
-  private contentHashes = new Map<string, string>();
-  private scanDebouncer = new Map<string, NodeJS.Timeout>();
-  private performanceOptions: PerformanceOptions;
-  private scanStatus: ScanStatusInfo = { status: 'idle' };
-  private statusBarItem: vscode.StatusBarItem;
 
   constructor() {
     this.logger = vscode.window.createOutputChannel("OnDemandSecrets");
     
-    // Get configuration
-    this.performanceOptions = this.getPerformanceOptions();
-    
-    // Initialize cache with configurable timeout
+    // Initialize cache with 5 minute timeout
     this.cache = new NodeCache({ 
-      stdTTL: this.performanceOptions.cacheTimeoutSeconds,
+      stdTTL: 300,
       checkperiod: 120 // Check for expired keys every 2 minutes
     });
-
-    // Create status bar item
-    this.statusBarItem = vscode.window.createStatusBarItem(
-      vscode.StatusBarAlignment.Right, 
-      100
-    );
-    this.updateStatusBar();
   }
 
   /**
-   * Main method to scan file for secrets with debouncing and caching
+   * Main method to scan file for secrets with caching
    */
   async scanFileForSecrets(
     filePath: string,
     fileContent: string,
     repositoryUrl: string
-  ): Promise<LocalSecretRisk[]> {
+  ): Promise<SecretsRisk[]> {
     try {
-      // Performance check: file size limit
-      if (!this.shouldScanFile(filePath, fileContent)) {
-        this.logger.appendLine(`Skipping scan for ${filePath}: file too large or unchanged`);
-        return [];
-      }
-
       // Check cache first
       const cacheKey = this.getCacheKey(filePath, fileContent);
-      const cachedResult = this.cache.get<LocalSecretRisk[]>(cacheKey);
+      const cachedResult = this.cache.get<SecretsRisk[]>(cacheKey);
       if (cachedResult) {
         this.logger.appendLine(`Cache hit for ${filePath}`);
         return cachedResult;
       }
 
-      // Update scan status
-      this.updateScanStatus({
-        status: 'scanning',
-        filePath,
-        progress: 0
-      });
-
-      // Debounce the scan
-      return new Promise((resolve) => {
-        this.clearExistingTimeout(filePath);
-        
-        const timeout = setTimeout(async () => {
-          try {
-            const results = await this.performScan(filePath, fileContent, repositoryUrl);
-            this.cache.set(cacheKey, results);
-            
-            this.updateScanStatus({
-              status: 'completed',
-              filePath,
-              progress: 100
-            });
-            
-            resolve(results);
-          } catch (error) {
-            this.handleScanError(error, filePath);
-            resolve([]);
-          }
-        }, this.performanceOptions.debounceDelayMs);
-        
-        this.scanDebouncer.set(filePath, timeout);
-      });
+      const results = await this.performScan(filePath, fileContent, repositoryUrl);
+      this.cache.set(cacheKey, results);
+      return results;
     } catch (error) {
-      this.handleScanError(error, filePath);
+      this.logger.appendLine(`Error scanning ${filePath}: ${error}`);
       return [];
     }
   }
@@ -111,7 +58,7 @@ export class OnDemandSecretsService {
     filePath: string,
     fileContent: string,
     repositoryUrl: string
-  ): Promise<LocalSecretRisk[]> {
+  ): Promise<SecretsRisk[]> {
     const apiClient = createApiiroRestApiClient(ON_DEMAND_API_BASE_URL);
     
     if (!apiClient) {
@@ -175,7 +122,7 @@ export class OnDemandSecretsService {
       // Debug: Log transformed secrets
       this.logger.appendLine(`=== TRANSFORMED SECRETS DEBUG ===`);
       localSecrets.forEach((secret, index) => {
-        this.logger.appendLine(`Transformed ${index}: line ${secret.sourceCode.lineNumber}, content: "${secret.lineContent}"`);
+        this.logger.appendLine(`Transformed ${index}: line ${secret.sourceCode.lineNumber}, content: "${secret.previewLines[0] || 'N/A'}"`);
       });
       this.logger.appendLine(`=== END TRANSFORMED SECRETS DEBUG ===`);
 
@@ -193,25 +140,20 @@ export class OnDemandSecretsService {
   private transformApiResponseToRisks(
     response: OnDemandSecretsResponse,
     filePath: string
-  ): LocalSecretRisk[] {
+  ): SecretsRisk[] {
     // Response is directly an array of OnDemandSecretItem
-    return response.map(item => this.createSecretRisk(item, filePath));
+    return response.map((item: OnDemandSecretItem) => this.createSecretRisk(item, filePath));
   }
 
   /**
-   * Create a LocalSecretRisk from API response item
+   * Create a SecretsRisk from API response item
    */
-  private createSecretRisk(item: OnDemandSecretItem, filePath: string): LocalSecretRisk {
-    // Generate content hash for deduplication
-    const contentHash = this.performanceOptions.enableContentHashing
-      ? crypto.createHash('md5').update(item.previewLine).digest('hex')
-      : undefined;
-
-    // Create the local secret risk directly
-    const localSecretRisk: LocalSecretRisk = {
-      id: item.secretHash,
+  private createSecretRisk(item: OnDemandSecretItem, filePath: string): SecretsRisk {
+    // Create the local secret risk directly 
+    const localSecretRisk: SecretsRisk & { isLocalDetection: boolean } = {
+      id: crypto.createHash('md5').update(`${filePath}-${item.lineNumber}-${item.previewLine}`).digest('hex'),
       type: "secrets",
-      riskLevel: this.mapValidityToRiskLevel(item.validity),
+      riskLevel: riskLevels.Medium, // Default to medium for local detections
       riskStatus: "active",
       ruleName: item.secretType,
       riskCategory: "Secrets",
@@ -219,7 +161,7 @@ export class OnDemandSecretsService {
       discoveredOn: new Date().toISOString(),
       insights: [{
         name: "Local Detection",
-        reason: `Detected using ${item.detectionMethod} scanning`
+        reason: "Detected in local workspace"
       }],
       apiiroRiskUrl: "",
       source: [{
@@ -231,7 +173,7 @@ export class OnDemandSecretsService {
           branchName: "",
           businessImpact: "Medium",
           isArchived: false,
-          key: item.secretHash,
+          key: crypto.createHash('md5').update(`${filePath}-${item.lineNumber}`).digest('hex'),
           monitoringStatus: {
             ignoredBy: null,
             ignoredOn: null,
@@ -242,7 +184,7 @@ export class OnDemandSecretsService {
           privacySettings: "public",
           profileUrl: "",
           repositoryGroup: "",
-          riskLevel: this.mapValidityToRiskLevel(item.validity),
+          riskLevel: riskLevels.Medium,
           serverUrl: "",
           url: ""
         },
@@ -253,9 +195,7 @@ export class OnDemandSecretsService {
       sourceCode: {
         filePath: filePath,
         lineNumber: item.lineNumber,
-        url: "",
-        columnStart: 0,
-        columnEnd: item.previewLine.length
+        url: ""
       },
       contributors: null,
       actionsTaken: null,
@@ -264,19 +204,14 @@ export class OnDemandSecretsService {
       // SecretsRisk specific properties
       secretType: item.secretType,
       fileType: item.fileType,
-      exposure: item.exposure.toLowerCase(),
-      validity: item.validity,
+      exposure: "unknown",
+      validity: "unknown",
       previewLines: [item.previewLine],
-      // LocalSecretRisk specific properties
-      isLocalOnly: true,
-      detectionMethod: 'on-demand',
-      confidence: this.mapValidityToConfidence(item.validity),
-      lineContent: item.previewLine,
-      scanTimestamp: Date.now(),
-      contentHash
+      // Local detection marker
+      isLocalDetection: true
     };
 
-    return localSecretRisk;
+    return localSecretRisk as SecretsRisk;
   }
 
   /**
@@ -353,53 +288,11 @@ export class OnDemandSecretsService {
   }
 
   /**
-   * Determine if file should be scanned based on performance criteria
-   */
-  private shouldScanFile(filePath: string, content: string): boolean {
-    // Check file size limit
-    const fileSizeKB = Buffer.byteLength(content, 'utf8') / 1024;
-    if (fileSizeKB > this.performanceOptions.maxFileSizeKB) {
-      this.logger.appendLine(`File ${filePath} too large: ${fileSizeKB}KB > ${this.performanceOptions.maxFileSizeKB}KB`);
-      return false;
-    }
-
-    // Check content changes if hashing is enabled
-    if (this.performanceOptions.enableContentHashing) {
-      const newHash = crypto.createHash('md5').update(content).digest('hex');
-      const oldHash = this.contentHashes.get(filePath);
-      
-      if (oldHash === newHash) {
-        return false; // No content change
-      }
-      
-      this.contentHashes.set(filePath, newHash);
-    }
-
-    // Skip binary files and other non-text files
-    if (this.isBinaryFile(filePath)) {
-      return false;
-    }
-
-    return true;
-  }
-
-  /**
    * Generate cache key based on file path and content
    */
   private getCacheKey(filePath: string, content: string): string {
     const contentHash = crypto.createHash('md5').update(content).digest('hex');
     return `secrets_${filePath}_${contentHash}`;
-  }
-
-  /**
-   * Clear existing timeout for a file
-   */
-  private clearExistingTimeout(filePath: string): void {
-    const existingTimeout = this.scanDebouncer.get(filePath);
-    if (existingTimeout) {
-      clearTimeout(existingTimeout);
-      this.scanDebouncer.delete(filePath);
-    }
   }
 
   /**
@@ -439,11 +332,7 @@ export class OnDemandSecretsService {
       }
     }
     
-    this.updateScanStatus({
-      status: 'error',
-      filePath,
-      error: errorMessage
-    });
+
 
     // Log detailed error but don't propagate to avoid breaking existing functionality
     this.logger.appendLine(`Full error details: ${JSON.stringify({
@@ -454,51 +343,7 @@ export class OnDemandSecretsService {
     })}`);
   }
 
-  /**
-   * Update scan status and status bar
-   */
-  private updateScanStatus(status: ScanStatusInfo): void {
-    this.scanStatus = status;
-    this.updateStatusBar();
-  }
 
-  /**
-   * Update status bar display
-   */
-  private updateStatusBar(): void {
-    switch (this.scanStatus.status) {
-      case 'scanning':
-        this.statusBarItem.text = `$(sync~spin) Scanning secrets...`;
-        this.statusBarItem.show();
-        break;
-      case 'completed':
-        this.statusBarItem.text = `$(check) Secrets scan complete`;
-        this.statusBarItem.show();
-        setTimeout(() => this.statusBarItem.hide(), 2000);
-        break;
-      case 'error':
-        this.statusBarItem.text = `$(error) Secrets scan failed`;
-        this.statusBarItem.show();
-        setTimeout(() => this.statusBarItem.hide(), 3000);
-        break;
-      default:
-        this.statusBarItem.hide();
-    }
-  }
-
-  /**
-   * Get performance options from VS Code configuration
-   */
-  private getPerformanceOptions(): PerformanceOptions {
-    const config = vscode.workspace.getConfiguration("apiiroCode.secretsOnDemand");
-    
-    return {
-      maxFileSizeKB: config.get("maxFileSizeKB", 1024),
-      debounceDelayMs: config.get("debounceDelayMs", 300),
-      cacheTimeoutSeconds: config.get("cacheTimeoutSeconds", 300),
-      enableContentHashing: config.get("enableContentHashing", true)
-    };
-  }
 
   /**
    * Get file extension for metadata
@@ -526,26 +371,10 @@ export class OnDemandSecretsService {
   }
 
   /**
-   * Clear all caches and timeouts
+   * Clear all caches
    */
   dispose(): void {
     this.cache.flushAll();
-    this.contentHashes.clear();
-    
-    // Clear all pending timeouts
-    for (const timeout of this.scanDebouncer.values()) {
-      clearTimeout(timeout);
-    }
-    this.scanDebouncer.clear();
-    
-    this.statusBarItem.dispose();
-  }
-
-  /**
-   * Get current scan status
-   */
-  getScanStatus(): ScanStatusInfo {
-    return this.scanStatus;
   }
 
   /**
@@ -554,7 +383,6 @@ export class OnDemandSecretsService {
   clearCacheForFile(filePath: string): void {
     const keys = this.cache.keys().filter(key => key.includes(filePath));
     keys.forEach(key => this.cache.del(key));
-    this.contentHashes.delete(filePath);
   }
 
   /**
