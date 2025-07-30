@@ -1,10 +1,10 @@
 {
   "name": "cursor-ext",
   "displayName": "Apiiro Code",
-  "description": "Enhanced cursor extension for Cursor",
+  "description": "Code security and risk analysis for Cursor",
   "publisher": "Apiiro",
   "icon": "images/icon.png",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "engines": {
     "vscode": "^1.92.0"
   },
@@ -50,7 +50,7 @@
       },
       {
         "command": "apiiro-code.openCursorChat",
-        "title": "Open in Cursor Chat",
+        "title": "✧ Fix with AutoFix AI Agent",
         "category": "Apiiro"
       }
     ],

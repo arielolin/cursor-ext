@@ -16,7 +16,7 @@ export function createLocalSecretsMessage(risk: SecretsRisk): string {
 
 **Exposure:** ${risk.exposure ?? "N/A"}
 
-[💬 Open in Cursor Chat](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(risk))})
+[✧ Fix with AutoFix AI Agent](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(risk))})
 `;
 }
 
