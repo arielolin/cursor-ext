@@ -48,7 +48,7 @@ export function createSastHoverMessage(risk: SASTRisk): string {
 
 ${formatComplianceLinks(risk)}
 
-[💬 Open in Cursor Chat](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(risk))})
+[✧ Fix with AutoFix AI Agent](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(risk))})
 
 **More info:** ${risk.description}
 `;

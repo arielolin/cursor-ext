@@ -21,6 +21,6 @@ ${hasRemedy(risk) ? `\n[Remediate](command:apiiro-code.remediate?${encodedRisk})
 
 ${hasRemedy(risk) ? `\n[Remediate](command:apiiro-code.remediate?${encodedRisk})` : ""}
 
-[💬 Open in Cursor Chat](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(risk))})
+[✧ Fix with AutoFix AI Agent](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(risk))})
 `;
 }

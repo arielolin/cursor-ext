@@ -109,7 +109,7 @@ class OSSMessageBuilder {
   addCursorChatLink(): OSSMessageBuilder {
     if (this.risk.id) {
       this.message.push(
-        `[💬 Open in Cursor Chat](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(this.risk))})`,
+        `[✧ Fix with AutoFix AI Agent](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(this.risk))})`,
       );
     }
     return this;

@@ -108,7 +108,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const editor = vscode.window.activeTextEditor;
       if (editor) {
         preventHighlights = true;
-        await riskHighlighter.removeAllHighlights(editor);
+        // Clear only Apiiro highlights to preserve local secrets during remediation
         await remediateRisk(
           editor,
           risk,
@@ -157,16 +157,29 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  const debounceHighlight = _.debounce(async (editor: vscode.TextEditor) => {
-    await highlightRisks(editor, repoData);
+  // Trigger full refresh of all highlights on file save
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument(async (document) => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && editor.document === document) {
+        logger.appendLine(`[${new Date().toISOString()}] [INFO] File saved, full refresh: clearing all highlights and re-scanning for both remote and local risks: ${document.fileName}`);
+        // On save: clear ALL highlights (both remote and local) and do fresh scan
+        riskHighlighter.removeAllHighlights(editor);
+        await highlightRisks(editor, repoData);
+      }
+    }),
+  );
+
+  // Lightweight debounced highlighting for text changes (Apiiro risks only)
+  const debounceApiiroHighlight = _.debounce(async (editor: vscode.TextEditor) => {
+    await riskHighlighter.highlightApiiroRisksOnly(editor, repoData);
   }, 500);
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument(async (event) => {
       const editor = vscode.window.activeTextEditor;
       if (editor && editor.document === event.document) {
-        await riskHighlighter.removeAllHighlights(editor);
-        debounceHighlight(editor);
+        debounceApiiroHighlight(editor);
       }
     }),
   );

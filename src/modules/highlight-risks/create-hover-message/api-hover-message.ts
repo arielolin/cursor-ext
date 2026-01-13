@@ -105,7 +105,7 @@ ${risk.insights.map((insight) => `- ${insight.name}: ${insight.reason}`).join("\
 
 **Discovery Date:** ${new Date(risk.discoveredOn)?.toLocaleString()}
 
-[💬 Open in Cursor Chat](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(risk))})
+[✧ Fix with AutoFix AI Agent](command:apiiro-code.openCursorChat?${encodeURIComponent(JSON.stringify(risk))})
 
 `;
 }
